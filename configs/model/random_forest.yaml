@@ -1,0 +1,9 @@
+# @package _global_
+# Model configuration for Random Forest
+
+model:
+  name: "RandomForest"
+  type: "random_forest"
+  
+  # Model-specific parameters
+  n_estimators: 100

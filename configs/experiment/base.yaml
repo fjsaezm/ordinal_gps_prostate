@@ -1,0 +1,6 @@
+# @package _global_
+# Base experiment configuration
+
+experiment:
+  name: "base"
+  description: "Base experiment configuration"

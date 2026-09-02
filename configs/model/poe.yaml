@@ -1,0 +1,13 @@
+# @package _global_
+model:
+  name: "POE"
+  type: "tensorflow_probabilistic_ordinal"
+  inner_dims: [100]
+  activations: ["relu"]
+  embedding_dim: 32
+  dropout_rate: 0.0
+  kl_weight: 0.00001
+  ordinal_weight: 0.0001
+  margin: 5.0
+  mc_samples_train: 4
+  mc_samples_predict: 16

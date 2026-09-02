@@ -1,0 +1,9 @@
+# @package _global_
+# Model configuration for MLP
+
+model:
+  name: "MLP"
+  type: "sklearn_baseline"
+  
+  # Model-specific parameters
+  hidden_layer_sizes: [100]  # Can be overridden

@@ -1,0 +1,14 @@
+# @package _global_
+# Experiment with fixed kernel parameters (not trained)
+
+defaults:
+  - base
+  - override /model: ordinal_svgp
+
+experiment:
+  name: "fixed_kernel"
+  description: "OrdinalSVGP with fixed kernel parameters"
+
+model:
+  train_kernel_params: false
+  train_inducing_points: true

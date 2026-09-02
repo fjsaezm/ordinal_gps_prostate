@@ -1,0 +1,34 @@
+# Main configuration file
+defaults:
+  - dataset: sicap
+  - model: ordinal_svgp
+  - experiment: base
+  - _self_
+
+# Experiment settings
+seed: 0
+wandb:
+  project: "OrdinalAblation"
+  enabled: true
+
+# Training settings
+training:
+  epochs: 5000
+  learning_rate: 0.01
+  batch_size: 4096
+  patience: 200
+  log_interval: 100
+  class_weights: "compute"
+  lr_scheduler: "linear"  # Options: "linear", "none", "cosine"
+  lr_scheduler_last_epoch: 10
+  lr_min_factor: 0.01
+
+# Output settings
+output:
+  save_weights: true
+  save_weights_path: null  # Will be set by wandb
+
+# Override settings
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}

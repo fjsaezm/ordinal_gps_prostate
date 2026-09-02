@@ -1,0 +1,9 @@
+# @package _global_
+# Model configuration for SVM
+
+model:
+  name: "SVM"
+  type: "sklearn_baseline"
+  
+  # Model-specific parameters
+  probability: true  # Enable probability estimates

@@ -1,0 +1,9 @@
+# @package _global_
+# Model configuration for K-Nearest Neighbors
+
+model:
+  name: "KNN"
+  type: "knn"
+  
+  # Model-specific parameters
+  n_neighbors: 5

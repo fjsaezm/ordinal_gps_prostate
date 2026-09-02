@@ -1,0 +1,9 @@
+# @package _global_
+# Model configuration for R-style Ordinal Regression
+
+model:
+  name: "RLOrdinal"
+  type: "rl_ordinal"
+  
+  # Model-specific parameters
+  distribution: "logit"  # logit or probit

@@ -1,0 +1,34 @@
+# @package _global_
+# Model configuration for OrdinalDSVI_DGP
+
+model:
+  name: "OrdinalDSVI_DGP"
+  type: "ordinal_dsvi_dgp"
+  
+  # Kernel configuration
+  kernel:
+    type: "RBF"
+    lengthscale: "scale"
+  
+  # Inducing points configuration
+  inducing_points:
+    num_inducing: 200
+    init_method: "kmeans"
+  
+  # Model-specific parameters
+  num_layers: 2
+  prior_temp: 1.0
+  inner_mean_function: "PCA"
+  gps_inner_layer: 1
+  
+  # Training control parameters
+  train_kernel_params: true
+  train_inducing_points: true
+  train_likelihood_params: true
+
+  likelihood: "Ordinal_trainable"
+  standardize_bins: true
+  bin_range: None
+  
+
+

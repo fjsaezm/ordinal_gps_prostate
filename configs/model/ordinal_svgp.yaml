@@ -1,0 +1,49 @@
+# @package _global_
+# Model configuration for OrdinalSVGP
+
+model:
+  name: "OrdinalSVGP"
+  type: "ordinal_svgp"
+  
+  # Kernel configuration
+  kernel:
+    type: "RBF"
+    lengthscale: "scale"
+  
+  # Inducing points configuration
+  inducing_points:
+    num_inducing: 500
+    init_method: "kmeans"  # "kmeans" or "random"
+  
+  # Model-specific parameters
+  bin_size: 1.0
+  prior_temp: 1.0
+  inner_mean_function: "zero"
+  bin_range: 1.0
+  standardize_bins: true
+  
+  # Training control parameters
+  train_kernel_params: true
+  train_inducing_points: true
+  train_likelihood_params: true
+
+  likelihood: "Ordinal_trainable"
+  predict_likelihood_variance: true
+
+  # Optional input-dependent likelihood scale. The default preserves the
+  # existing homoscedastic OrdinalSVGP exactly.
+  heteroscedastic: false
+  # Options when heteroscedastic=true: "mlp" or "svgp".
+  heteroscedastic_predictor: "mlp"
+  heteroscedastic_mlp:
+    hidden_dims: [32]
+    activations: ["tanh"]
+    baseline_sigma: 1.0
+    # Bounds sigma(x) to approximately [baseline / 4, baseline * 4].
+    max_log_scale_deviation: 1.3862943611198906
+  heteroscedastic_svgp:
+    baseline_sigma: 1.0
+    # Bounds sigma(x) to approximately [baseline / 4, baseline * 4].
+    max_log_scale_deviation: 1.3862943611198906
+    num_monte_carlo_points: 32
+    num_predictive_samples: 128

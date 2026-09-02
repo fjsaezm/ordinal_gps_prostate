@@ -1,0 +1,26 @@
+# @package _global_
+# Model configuration for SVGP_multiclass
+
+model:
+  name: "SVGP_multiclass"
+  type: "svgp_multiclass"
+  
+  # Kernel configuration
+  kernel:
+    type: "RBF"
+    lengthscale: 1.0
+  
+  # Inducing points configuration
+  inducing_points:
+    num_inducing: 500
+    init_method: "kmeans"
+  
+  # Model-specific parameters
+  inner_mean_function: "zero"
+  
+  # Training control parameters
+  train_kernel_params: true
+  train_inducing_points: true
+  train_likelihood_params: false # Useless
+
+  likelihood: "Multiclass"

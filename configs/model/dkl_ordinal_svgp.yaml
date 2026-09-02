@@ -1,0 +1,36 @@
+# @package _global_
+# Model configuration for DKL_OrdinalSVGP 
+
+model:
+  name: "DKL_OrdinalSVGP"
+  type: "DKL_OrdinalSVGP"
+  
+  mlp_config:
+    hidden_layer_sizes: [64] 
+    activations: [None]
+    dropout_rate: 0.2
+
+
+
+
+  # Kernel configuration
+  kernel:
+    type: "RBF"
+    lengthscale: "scale"
+  
+  # Inducing points configuration
+  inducing_points:
+    num_inducing: 100
+    init_method: "kmeans"  # "kmeans" or "random"
+  
+  # Model-specific parameters
+  bin_size: 1.0
+  prior_temp: 1.0
+  inner_mean_function: "zero"
+  
+  # Training control parameters
+  train_kernel_params: true
+  train_inducing_points: true
+  train_likelihood_params: true
+
+  likelihood: "Ordinal_trainable"

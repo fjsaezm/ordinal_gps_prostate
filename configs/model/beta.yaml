@@ -1,0 +1,10 @@
+# @package _global_
+model:
+  name: "Beta"
+  type: "tensorflow_ordinal"
+  inner_dims: [100]
+  activations: ["relu"]
+  dropout_rate: 0.0
+  smoothing: 1.0
+  output_scheme: "stick_breaking"
+

@@ -1,0 +1,11 @@
+# @package _global_
+model:
+  name: "CORF"
+  type: "tensorflow_ordinal_forest"
+  inner_dims: [100]
+  activations: ["relu"]
+  dropout_rate: 0.0
+  num_trees: 5
+  depth: 6
+  leaf_temperature: 0.5
+  probability_epsilon: 0.000001

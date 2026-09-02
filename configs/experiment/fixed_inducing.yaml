@@ -1,0 +1,14 @@
+# @package _global_
+# Experiment with fixed inducing points (not trained)
+
+defaults:
+  - base
+  - override /model: ordinal_svgp
+
+experiment:
+  name: "fixed_inducing"
+  description: "OrdinalSVGP with fixed inducing points"
+
+model:
+  train_kernel_params: true
+  train_inducing_points: false

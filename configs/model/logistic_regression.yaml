@@ -1,0 +1,9 @@
+# @package _global_
+# Model configuration for Logistic Regression
+
+model:
+  name: "LogisticRegression"
+  type: "sklearn_baseline"
+  
+  # Model-specific parameters
+  max_iter: 1000  # Will use training.epochs if not specified

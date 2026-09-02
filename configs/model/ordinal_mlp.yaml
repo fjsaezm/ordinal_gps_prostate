@@ -1,0 +1,17 @@
+# @package _global_
+# Model configuration for OrdinalMLP
+
+model:
+  name: "OrdinalMLP"
+  type: "tensorflow_ordinal"
+  
+  # Model-specific parameters
+  inner_dims: [100]
+  activations: ["relu"]
+  dropout_rate: 0.0
+  
+  # Likelihood parameters (same as GP models)
+  likelihood: "Ordinal_trainable"
+  bin_size: 1.0
+  bin_range: null
+  standardize_bins: false

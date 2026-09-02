@@ -1,0 +1,11 @@
+# @package _global_
+# Ablation study experiment configuration
+
+experiment:
+  name: "ablation"
+  description: "Ablation study experiment"
+
+# Override training settings for ablation
+training:
+  epochs: 5000
+  patience: 100

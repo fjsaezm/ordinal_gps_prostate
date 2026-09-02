@@ -1,0 +1,11 @@
+# @package _global_
+model:
+  name: "CORE"
+  type: "tensorflow_ordinal_regularized"
+  inner_dims: [100]
+  activations: ["relu"]
+  dropout_rate: 0.0
+  core_weight: 1.0
+  feature_temperature: 2.0
+  label_temperature: 1.0
+

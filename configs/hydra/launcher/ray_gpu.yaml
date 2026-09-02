@@ -1,0 +1,9 @@
+# @package hydra.launcher
+_target_: hydra_plugins.hydra_ray_launcher.ray_launcher.RayLauncher
+ray:
+  init:
+    num_cpus: 8
+    num_gpus: 2  # Total number of GPUs available
+  remote:
+    num_gpus: 0.5  # GPU fraction per job (0.5 means 2 jobs per GPU)
+    num_cpus: 2    # CPUs per job

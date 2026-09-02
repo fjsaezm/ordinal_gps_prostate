@@ -1,0 +1,6 @@
+# @package hydra.launcher
+_target_: hydra._internal.core.plugins.basic_launcher.BasicLauncher
+class_path: joblib.Parallel
+n_jobs: 2  # Number of parallel jobs (should match number of GPUs)
+backend: threading  # Use threading for GPU compatibility
+verbose: 10
