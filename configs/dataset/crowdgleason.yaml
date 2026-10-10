@@ -7,5 +7,3 @@ dataset:
   description: "CrowdGleason prostate cancer dataset"
   features: "UNI"  # Default feature type: UNI, UNI2, PHIKONV2, GIGAPATH, CONCHV15
   percentage: 100  # Percentage of training data to use (10, 20, ..., 100)
-  noise_level: None # Labels already noisy in this dataset
-  labels: "MV"   # Type of labels to use: MV (majority voting) or EM (Dawid-Skene EM)

@@ -18,12 +18,7 @@ def build_model(cfg: DictConfig, X_train, y_train):
     """
     model_name = cfg.model.name
 
-    if model_name in [
-        "OrdinalSVGP",
-        "SVGP_multiclass",
-        "DKL_OrdinalSVGP",
-        "OrdinalDSVI_DGP",
-    ]:
+    if model_name in ["OrdinalSVGP", "SVGP_multiclass"]:
         model = instance_gp_based_model(cfg, X_train, y_train)
 
     elif model_name == "LogisticRegression":
@@ -97,11 +92,6 @@ def build_model(cfg: DictConfig, X_train, y_train):
 
         n_neighbors = cfg.model.get("n_neighbors", 5)
         model = KNeighborsClassifier(n_neighbors=n_neighbors)
-
-    elif model_name == "NaiveBayes":
-        from sklearn.naive_bayes import GaussianNB
-
-        model = GaussianNB()
 
     elif model_name == "RandomForest":
         from sklearn.ensemble import RandomForestClassifier

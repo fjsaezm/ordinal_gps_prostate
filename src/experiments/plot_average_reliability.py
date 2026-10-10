@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
+import re
 import sys
 import warnings
 from dataclasses import dataclass
@@ -58,12 +60,15 @@ MODELS = (
     "OrdinalMLP",
     "SVM",
     "SVGP_multiclass",
+    "SORD",
+    "Beta",
+    "POE",
+    "CORE",
+    "DRF",
+    "CORF",
     "OrdinalSVGP",
 )
-# OrdinalMLP is intentionally not in the default set. Its historical Keras
-# archives did not track the separately attached TrainableOrdinal parameters,
-# so its published probabilities cannot be reconstructed from those files.
-DEFAULT_MODELS = tuple(model for model in MODELS if model != "OrdinalMLP")
+DEFAULT_MODELS = MODELS
 MODEL_LABELS = {
     "LogisticRegression": "LR",
     "RLOrdinal": "OLR",
@@ -73,6 +78,12 @@ MODEL_LABELS = {
     "OrdinalMLP": "OMLP",
     "SVM": "SVM",
     "SVGP_multiclass": "MGP",
+    "SORD": "SORD",
+    "Beta": "Beta",
+    "POE": "POE",
+    "CORE": "CORE",
+    "DRF": "DRF",
+    "CORF": "CORF",
     "OrdinalSVGP": "OGP",
 }
 PAPER_RESULTS = {
@@ -90,6 +101,21 @@ SKLEARN_MODELS = {
     "SVM",
 }
 GP_MODELS = {"SVGP_multiclass", "OrdinalSVGP"}
+MODERN_ORDINAL_MODELS = {"SORD", "Beta", "POE", "CORE", "DRF", "CORF"}
+NEW_MODEL_LOG_NAMES = {
+    "ordinal_mlp": "OrdinalMLP",
+    "sord": "SORD",
+    "beta": "Beta",
+    "poe": "POE",
+    "core": "CORE",
+    "drf": "DRF",
+    "corf": "CORF",
+}
+RUN_LOG_PATTERN = re.compile(
+    r"^(?P<dataset>sicap|crowdgleason)_(?P<feature>[^_]+)_"
+    r"(?P<model>ordinal_mlp|sord|beta|poe|core|drf|corf)_seed(?P<fold>\d+)\.log$"
+)
+WANDB_LOG_PATTERN = re.compile(r"Find logs at: \./(?P<path>wandb/run-[^/]+)/logs")
 
 
 @dataclass(frozen=True)
@@ -149,6 +175,38 @@ def load_expected_results(
         )
         expected[(result.model, result.fold)] = result
 
+    root = Path(__file__).resolve().parents[2]
+    for log_path in sorted((root / "logs/ordinal_baselines").glob("*_seed*.log")):
+        match = RUN_LOG_PATTERN.match(log_path.name)
+        if match is None:
+            continue
+        model = NEW_MODEL_LOG_NAMES[match.group("model")]
+        fold = int(match.group("fold"))
+        if (
+            match.group("dataset") != dataset
+            or match.group("feature") != feature
+            or model not in models
+            or fold not in folds
+        ):
+            continue
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+        run_matches = list(WANDB_LOG_PATTERN.finditer(log_text))
+        if not run_matches:
+            continue
+        summary_path = root / run_matches[-1].group("path") / "files/wandb-summary.json"
+        if not summary_path.is_file():
+            continue
+        with summary_path.open(encoding="utf-8") as handle:
+            summary = json.load(handle)
+        if summary.get("test/kappa") is None or summary.get("test/ece") is None:
+            continue
+        expected[(model, fold)] = PaperResult(
+            model=model,
+            fold=fold,
+            kappa=float(summary["test/kappa"]),
+            ece=float(summary["test/ece"]),
+        )
+
     wanted = {(model, fold) for model in models for fold in folds}
     missing = sorted(wanted - set(expected))
     if missing:
@@ -162,8 +220,10 @@ def _checkpoint_exists(model: str, files_dir: Path):
     if model in SKLEARN_MODELS:
         return (weights_dir / "best.pkl").exists()
     if model == "OrdinalMLP":
-        return (weights_dir / "best.keras").exists()
-    if model in GP_MODELS:
+        # Historical best.keras files omitted the separately attached ordinal
+        # likelihood. Only complete TensorFlow checkpoints are admissible.
+        return tf.train.latest_checkpoint(str(weights_dir)) is not None
+    if model in GP_MODELS or model in MODERN_ORDINAL_MODELS:
         return tf.train.latest_checkpoint(str(weights_dir)) is not None
     return False
 
@@ -284,6 +344,101 @@ def restore_gp_checkpoint(model, checkpoint_path: str):
         status.assert_existing_objects_matched()
 
 
+def restore_modern_ordinal_checkpoint(model, checkpoint_path: str):
+    """Restore TF 2.11 checkpoints whose object graph is unreadable by Keras 3."""
+    checkpoint_names = {name for name, _ in tf.train.list_variables(checkpoint_path)}
+    restored = []
+    optimizer_fallback_index = 0
+
+    def assign(variable, name):
+        nonlocal optimizer_fallback_index
+        candidates = [f"model/{name}/.ATTRIBUTES/VARIABLE_VALUE"]
+        if name.endswith("/kernel"):
+            candidates.append(
+                f"model/{name[:-len('kernel')]}_kernel/.ATTRIBUTES/VARIABLE_VALUE"
+            )
+        key = next((candidate for candidate in candidates if candidate in checkpoint_names), None)
+        if key is None:
+            # Keras 3 may omit layers reached through a custom `embed` method
+            # from the model object graph, while retaining their values in the
+            # optimizer's ordered trainable-variable list.
+            fallback = (
+                f"optimizer/_trainable_variables/{optimizer_fallback_index}/"
+                ".ATTRIBUTES/VARIABLE_VALUE"
+            )
+            optimizer_fallback_index += 1
+            if fallback not in checkpoint_names:
+                raise RuntimeError(
+                    f"Missing {', '.join(candidates)} and {fallback} in {checkpoint_path}"
+                )
+            key = fallback
+        value = tf.train.load_variable(checkpoint_path, key)
+        if tuple(value.shape) != tuple(variable.shape):
+            raise RuntimeError(
+                f"Shape mismatch for {key}: checkpoint {value.shape}, model {variable.shape}"
+            )
+        variable.assign(value)
+        restored.append(key)
+
+    def restore_backbone(backbone, checkpoint_prefix):
+        for index, layer in enumerate(backbone.hidden_layers):
+            assign(layer.kernel, f"{checkpoint_prefix}/hidden_layers/{index}/kernel")
+            assign(layer.bias, f"{checkpoint_prefix}/hidden_layers/{index}/bias")
+        if backbone.output_layer.built:
+            assign(backbone.output_layer.kernel, f"{checkpoint_prefix}/output_layer/kernel")
+            assign(backbone.output_layer.bias, f"{checkpoint_prefix}/output_layer/bias")
+
+    if hasattr(model, "backbone"):
+        restore_backbone(model.backbone, "backbone")
+    if hasattr(model, "router"):
+        restore_backbone(model.router, "router")
+    for attribute in ("mean_layer", "log_variance_layer", "classifier"):
+        if hasattr(model, attribute):
+            layer = getattr(model, attribute)
+            assign(layer.kernel, f"{attribute}/kernel")
+            assign(layer.bias, f"{attribute}/bias")
+    for attribute in (
+        "leaf_means",
+        "leaf_variances",
+        "leaf_cumulative_probabilities",
+    ):
+        if hasattr(model, attribute):
+            assign(getattr(model, attribute), attribute)
+
+    if not restored:
+        raise RuntimeError(f"No model tensors restored from {checkpoint_path}")
+
+
+def restore_ordinal_mlp_checkpoint(model, checkpoint_path: str):
+    """Restore a complete TF 2.8 OMLP checkpoint across TF/Keras versions."""
+    checkpoint_names = {name for name, _ in tf.train.list_variables(checkpoint_path)}
+
+    def assign(variable, name):
+        key = f"{name}/.ATTRIBUTES/VARIABLE_VALUE"
+        if key not in checkpoint_names:
+            raise RuntimeError(f"Missing {key} in {checkpoint_path}")
+        value = tf.train.load_variable(checkpoint_path, key)
+        if tuple(value.shape) != tuple(variable.shape):
+            raise RuntimeError(
+                f"Shape mismatch for {key}: checkpoint {value.shape}, model {variable.shape}"
+            )
+        variable.assign(value)
+
+    for index, layer in enumerate(model.hidden_layers):
+        assign(layer.kernel, f"model/hidden_layers/{index}/kernel")
+        assign(layer.bias, f"model/hidden_layers/{index}/bias")
+    assign(model.output_layer.kernel, "model/output_layer/kernel")
+    assign(model.output_layer.bias, "model/output_layer/bias")
+    assign(
+        model.ordinal_likelihood._bin_increments.unconstrained_variable,
+        "ordinal_likelihood/_bin_increments/_pretransformed_input",
+    )
+    assign(
+        model.ordinal_likelihood.sigma.unconstrained_variable,
+        "ordinal_likelihood/sigma/_pretransformed_input",
+    )
+
+
 def load_saved_model(saved_run: SavedRun, X_train, y_train):
     weights_dir = saved_run.checkpoint_dir
     if saved_run.model in SKLEARN_MODELS:
@@ -293,10 +448,20 @@ def load_saved_model(saved_run: SavedRun, X_train, y_train):
     model = build_model(cfg, X_train, y_train)
     if saved_run.model in GP_MODELS:
         restore_gp_checkpoint(model, tf.train.latest_checkpoint(str(weights_dir)))
+    elif saved_run.model in MODERN_ORDINAL_MODELS:
+        # Materialize lazily built Keras layers before matching checkpoint variables.
+        model.predict_probabilities(
+            tf.convert_to_tensor(X_train[:1], dtype=tf.float64)
+        )
+        checkpoint_path = tf.train.latest_checkpoint(str(weights_dir))
+        restore_modern_ordinal_checkpoint(model, checkpoint_path)
     elif saved_run.model == "OrdinalMLP":
-        # Build variables before restoring weights from the Keras archive.
+        # Build dense variables, then restore both the network and the
+        # separately rooted ordinal-likelihood parameters.
         model(tf.convert_to_tensor(X_train[:1], dtype=tf.float64), training=False)
-        model.load_weights(weights_dir / "best.keras")
+        restore_ordinal_mlp_checkpoint(
+            model, tf.train.latest_checkpoint(str(weights_dir))
+        )
     return model
 
 
@@ -304,16 +469,39 @@ def predict_probabilities(saved_run: SavedRun, model, X_test):
     """Return probabilities and hard predictions used in the paper metrics."""
     if saved_run.model == "OrdinalSVGP":
         f_mean, f_var = model.predict_f(X_test)
+        historical_default = saved_run.dataset_config.get("name") != "crowdgleason"
+        use_likelihood_variance = bool(
+            # Historical runs predate this flag. SICAP used the learned scale,
+            # whereas CrowdGleason set it to zero because its consensus test
+            # labels followed a different annotation process from training.
+            saved_run.model_config.get(
+                "predict_likelihood_variance", historical_default
+            )
+        )
+        sigma = (
+            model.likelihood.noise_scale(
+                tf.convert_to_tensor(X_test, dtype=tf.float64)
+            ).numpy()
+            if use_likelihood_variance
+            else 0.0
+        )
         predictions, probabilities = predict_class_ordinal_manual(
-            f_mean,
-            f_var,
+            f_mean[..., :1],
+            f_var[..., :1],
             model.likelihood.bin_edges,
-            sigma=0.0,
+            sigma=sigma,
         )
     elif saved_run.model == "SVGP_multiclass":
         f_mean, _ = model.predict_f(X_test)
         probabilities = tf.nn.softmax(f_mean, axis=1).numpy()
         predictions = probabilities.argmax(axis=1)
+    elif saved_run.model in MODERN_ORDINAL_MODELS:
+        X_tensor = tf.convert_to_tensor(X_test, dtype=tf.float64)
+        probabilities = model.predict_probabilities(X_tensor).numpy()
+        if saved_run.model == "CORF":
+            predictions = model.predict_labels(X_tensor).numpy()
+        else:
+            predictions = probabilities.argmax(axis=1)
     elif saved_run.model == "OrdinalMLP":
         probabilities = model.predict_probabilities(
             tf.convert_to_tensor(X_test, dtype=tf.float64)
@@ -334,6 +522,11 @@ def predict_probabilities(saved_run: SavedRun, model, X_test):
         raise RuntimeError(f"Invalid probabilities from {saved_run.model}")
     if np.any(row_sums <= 0.0):
         raise RuntimeError(f"Non-positive probability sum from {saved_run.model}")
+    if saved_run.model == "OrdinalMLP":
+        # TrainableOrdinal clips each infinite-tail CDF to 0.001/0.999 for
+        # stable gradients, so OMLP outputs sum to 0.998. Preserve those exact
+        # training/evaluation-time confidences to reproduce its recorded ECE.
+        return probabilities, predictions
     return probabilities / row_sums, predictions
 
 
@@ -344,6 +537,10 @@ def verify_metrics(
     predictions: np.ndarray,
     tolerance: float,
 ):
+    # POE averages a finite number of latent samples at inference, so a restored
+    # checkpoint is subject to small Monte Carlo variation from the logged pass.
+    if saved_run.model == "POE":
+        tolerance = max(tolerance, 1e-2)
     labels = np.asarray(labels).reshape(-1).astype(int)
     predictions = np.asarray(predictions).reshape(-1).astype(int)
     with warnings.catch_warnings():
@@ -401,6 +598,9 @@ def evaluate_curves(
             cfg = evaluation_config(saved_run)
             X_train, y_train, X_test, y_test = load_dataset(cfg.dataset, cfg.seed)
             model = load_saved_model(saved_run, X_train, y_train)
+            # Make probabilistic prediction (notably POE) reproducible independently
+            # of random draws used while constructing and restoring the model.
+            tf.random.set_seed(fold)
             probabilities, predictions = predict_probabilities(
                 saved_run, model, X_test
             )
@@ -453,12 +653,13 @@ def nanstd_no_warning(values: np.ndarray, axis: int):
     )
 
 
-def plot_curves(curves, models, dataset, feature, n_bins, output, show):
-    fig, ax = plt.subplots(figsize=(8.2, 7.2))
-    colors = plt.get_cmap("tab10")(np.linspace(0.0, 0.9, len(models)))
+def plot_overlay(curves, models, dataset, feature, n_bins, output, show):
+    fig, ax = plt.subplots(figsize=(11.5, 7.2))
+    colors = plt.get_cmap("tab20")(np.arange(len(models)))
+    line_styles = ("-", "--", "-.", ":")
     fold_count = len(next(iter(curves.values())))
 
-    for color, model_name in zip(colors, models):
+    for model_index, (color, model_name) in enumerate(zip(colors, models)):
         fold_curves = curves[model_name]
         confidence = np.stack([curve["confidence"] for curve in fold_curves])
         accuracy = np.stack([curve["accuracy"] for curve in fold_curves])
@@ -476,6 +677,7 @@ def plot_curves(curves, models, dataset, feature, n_bins, output, show):
             marker="o",
             markersize=4,
             linewidth=1.8,
+            linestyle=line_styles[model_index % len(line_styles)],
             color=color,
             label=label,
         )
@@ -500,9 +702,92 @@ def plot_curves(curves, models, dataset, feature, n_bins, output, show):
     )
     ax.grid(alpha=0.25)
     ax.set_aspect("equal", adjustable="box")
-    ax.legend(loc="best", fontsize=8, frameon=True)
+    ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        fontsize=8,
+        frameon=True,
+    )
     fig.tight_layout()
 
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, bbox_inches="tight", dpi=300)
+    print(f"Saved reliability diagram to {output}")
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
+def plot_grid(curves, models, dataset, feature, n_bins, output, show):
+    """Plot one reliability curve per panel to keep many-model figures legible."""
+    del dataset, feature, n_bins
+    # Fifteen models fit naturally as three rows of five. Retain the historical
+    # seven-column layout for smaller/model-subset figures.
+    n_columns = 5 if len(models) == 15 else 7
+    n_rows = math.ceil(len(models) / n_columns)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_columns,
+        figsize=(15.5, 2.8 * n_rows),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+    axes = np.asarray(axes).reshape(-1)
+    colors = plt.get_cmap("tab20")(np.arange(len(models)))
+    for ax, color, model_name in zip(axes, colors, models):
+        fold_curves = curves[model_name]
+        confidence = np.stack([curve["confidence"] for curve in fold_curves])
+        accuracy = np.stack([curve["accuracy"] for curve in fold_curves])
+        mean_confidence = nanmean_no_warning(confidence, axis=0)
+        mean_accuracy = nanmean_no_warning(accuracy, axis=0)
+        std_accuracy = nanstd_no_warning(accuracy, axis=0)
+        valid = np.isfinite(mean_confidence) & np.isfinite(mean_accuracy)
+        eces = np.asarray([curve["ece"] for curve in fold_curves])
+        ece_std = eces.std(ddof=1) if len(eces) > 1 else 0.0
+
+        ax.plot(
+            [0, 1],
+            [0, 1],
+            linestyle="--",
+            color="0.35",
+            linewidth=1.0,
+            zorder=1,
+        )
+        ax.fill_between(
+            mean_confidence[valid],
+            np.clip(mean_accuracy[valid] - std_accuracy[valid], 0.0, 1.0),
+            np.clip(mean_accuracy[valid] + std_accuracy[valid], 0.0, 1.0),
+            color=color,
+            alpha=0.16,
+            linewidth=0,
+            zorder=2,
+        )
+        ax.plot(
+            mean_confidence[valid],
+            mean_accuracy[valid],
+            marker="o",
+            markersize=3.2,
+            linewidth=2.0 if model_name == "OrdinalSVGP" else 1.6,
+            color=color,
+            zorder=3,
+        )
+        ax.set_title(
+            f"{MODEL_LABELS[model_name]}  ·  ECE {eces.mean():.3f} ± {ece_std:.3f}",
+            fontsize=10,
+            pad=4,
+        )
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_aspect("equal", adjustable="box")
+        ax.grid(alpha=0.18, linewidth=0.6)
+        ax.tick_params(labelsize=8)
+
+    for ax in axes[len(models):]:
+        ax.set_visible(False)
+
+    fig.supxlabel("Mean confidence", fontsize=11)
+    fig.supylabel("Empirical accuracy", fontsize=11)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, bbox_inches="tight", dpi=300)
     print(f"Saved reliability diagram to {output}")
@@ -521,8 +806,8 @@ def parse_args():
         choices=MODELS,
         default=list(DEFAULT_MODELS),
         help=(
-            "Models to include. Defaults to every exactly restorable paper model; "
-            "historical OrdinalMLP archives are incomplete."
+            "Models to include. Defaults to all models, including OMLP; OMLP "
+            "requires a complete TensorFlow checkpoint from the current trainer."
         ),
     )
     parser.add_argument(
@@ -540,18 +825,18 @@ def parse_args():
         help="Allowed absolute difference from stored ECE and kappa.",
     )
     parser.add_argument("--show", action="store_true")
+    parser.add_argument(
+        "--layout",
+        choices=("grid", "overlay"),
+        default="grid",
+        help="Use readable per-model panels (default) or one combined axis.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     models = tuple(args.models)
-    if "OrdinalMLP" in models:
-        raise RuntimeError(
-            "OrdinalMLP cannot be plotted faithfully from the historical artifacts: "
-            "best.keras saved its dense layers but not the trainable ordinal-likelihood "
-            "thresholds and scale. Retrain/resave that model before including it."
-        )
     folds = tuple(args.folds)
     expected = load_expected_results(
         args.dataset,
@@ -578,7 +863,8 @@ def main():
     output = args.output or Path(
         f"results/reliability_{args.dataset}_{args.feature}.pdf"
     )
-    plot_curves(
+    plot_function = plot_grid if args.layout == "grid" else plot_overlay
+    plot_function(
         curves,
         models,
         args.dataset,

@@ -218,5 +218,11 @@ toy_ablation/
 toy_ablation_old/
 weights/
 *.out
+wandb-metadata.json
+CurrentPaper.pdf
 tests/
 src/notebooks/
+logs/
+.aws/
+.agents/
+.codex/

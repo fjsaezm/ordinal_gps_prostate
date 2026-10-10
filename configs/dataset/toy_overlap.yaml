@@ -4,5 +4,4 @@
 dataset:
   name: "toy_overlap"
   features: None
-  noise_level: 0
   percentage: 100

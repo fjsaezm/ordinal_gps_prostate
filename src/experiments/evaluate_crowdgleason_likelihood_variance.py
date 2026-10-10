@@ -1,8 +1,8 @@
-"""Evaluate saved CrowdGleason OrdinalSVGP runs with learned likelihood noise.
+"""Evaluate saved OrdinalSVGP runs with and without learned likelihood noise.
 
 This script does not retrain. It discovers the completed local W&B runs that
-produced the paper's CrowdGleason results, restores their checkpoints, and
-recomputes test predictions with ``sigma_delta`` retained. The original
+produced the paper's SICAP or CrowdGleason results, restores their checkpoints,
+and recomputes test predictions with ``sigma_delta`` retained. The original
 ``test/*`` summary values are never overwritten.
 """
 
@@ -39,7 +39,8 @@ EXPECTED_FEATURES = (
     "VIRCHOW2",
 )
 EXPECTED_SEEDS = tuple(range(5))
-WANDB_PREFIX = "test_with_likelihood_variance"
+WANDB_PREFIX_WITH = "test_with_likelihood_variance"
+WANDB_PREFIX_WITHOUT = "test_without_likelihood_variance"
 CORE_METRICS = ("acc", "kappa", "mae", "brier", "ece", "nll")
 
 
@@ -67,14 +68,14 @@ def _run_id(run_dir):
     return run_dir.name.rsplit("-", 1)[-1]
 
 
-def discover_runs(wandb_dir):
+def discover_runs(wandb_dir, dataset_name):
     """Return the newest completed baseline run for each feature/seed pair."""
     selected = {}
     for config_path in sorted(wandb_dir.glob("run-*/files/config.yaml")):
         try:
             config_text = config_path.read_text(encoding="utf-8")
             # Avoid YAML-parsing thousands of unrelated local runs.
-            if "        name: crowdgleason\n" not in config_text:
+            if f"        name: {dataset_name}\n" not in config_text:
                 continue
             if "        name: OrdinalSVGP\n" not in config_text:
                 continue
@@ -83,7 +84,7 @@ def discover_runs(wandb_dir):
             stored = yaml.safe_load(config_text)
             dataset = _value(stored, "dataset", {})
             model = _value(stored, "model", {})
-            if dataset.get("name") != "crowdgleason":
+            if dataset.get("name") != dataset_name:
                 continue
             if model.get("name") != "OrdinalSVGP":
                 continue
@@ -197,8 +198,6 @@ def evaluate_run(saved_run, verification_tolerance):
     bin_edges = model.likelihood.bin_edges
     sigma = float(np.asarray(model.likelihood.sigma.numpy()).reshape(()))
 
-    # Reproduce the stored setting first. This prevents silently pairing a
-    # checkpoint with the wrong feature extractor or historical fold.
     y_pred_without, probabilities_without = predict_class_ordinal_manual(
         f_mean, f_var, bin_edges, sigma=0.0
     )
@@ -207,19 +206,32 @@ def evaluate_run(saved_run, verification_tolerance):
         metrics_without, _ = compute_metrics(
             y_test, y_pred_without, probabilities_without
         )
-    kappa_error = abs(metrics_without["kappa"] - saved_run.stored_kappa)
-    if kappa_error > verification_tolerance:
-        raise RuntimeError(
-            f"checkpoint verification failed: stored kappa={saved_run.stored_kappa:.12f}, "
-            f"restored kappa={metrics_without['kappa']:.12f}, difference={kappa_error:.3g}"
-        )
-
     y_pred_with, probabilities_with = predict_class_ordinal_manual(
         f_mean, f_var, bin_edges, sigma=sigma
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UndefinedMetricWarning)
         metrics_with, _ = compute_metrics(y_test, y_pred_with, probabilities_with)
+
+    # Historical CrowdGleason summaries used zero likelihood variance, whereas
+    # the SICAP summaries used the learned variance. Accept whichever setting
+    # reproduces the stored run, while still detecting a mismatched checkpoint.
+    kappa_errors = {
+        "without_likelihood_variance": abs(
+            metrics_without["kappa"] - saved_run.stored_kappa
+        ),
+        "with_likelihood_variance": abs(
+            metrics_with["kappa"] - saved_run.stored_kappa
+        ),
+    }
+    stored_prediction_mode = min(kappa_errors, key=kappa_errors.get)
+    kappa_error = kappa_errors[stored_prediction_mode]
+    if kappa_error > verification_tolerance:
+        raise RuntimeError(
+            f"checkpoint verification failed: stored kappa={saved_run.stored_kappa:.12f}, "
+            f"without={metrics_without['kappa']:.12f}, "
+            f"with={metrics_with['kappa']:.12f}, closest difference={kappa_error:.3g}"
+        )
     return {
         "run_id": saved_run.run_id,
         "feature": saved_run.feature,
@@ -227,7 +239,8 @@ def evaluate_run(saved_run, verification_tolerance):
         "checkpoint": checkpoint_path,
         "likelihood_sigma": sigma,
         "likelihood_variance": sigma ** 2,
-        "stored_kappa_without_likelihood_variance": saved_run.stored_kappa,
+        "stored_kappa": saved_run.stored_kappa,
+        "stored_prediction_mode": stored_prediction_mode,
         **{
             f"{metric}_without_likelihood_variance": metrics_without[metric]
             for metric in CORE_METRICS
@@ -244,12 +257,20 @@ def update_wandb_summary(api, entity, project, result):
     )
     run = api.run(run_path)
     values = {
-        f"{WANDB_PREFIX}/predict_likelihood_variance": True,
-        f"{WANDB_PREFIX}/likelihood_sigma": result["likelihood_sigma"],
-        f"{WANDB_PREFIX}/likelihood_variance": result["likelihood_variance"],
+        f"{WANDB_PREFIX_WITH}/predict_likelihood_variance": True,
+        f"{WANDB_PREFIX_WITH}/likelihood_sigma": result["likelihood_sigma"],
+        f"{WANDB_PREFIX_WITH}/likelihood_variance": result["likelihood_variance"],
+        f"{WANDB_PREFIX_WITHOUT}/predict_likelihood_variance": False,
     }
     values.update(
-        {f"{WANDB_PREFIX}/{metric}": result[metric] for metric in CORE_METRICS}
+        {f"{WANDB_PREFIX_WITH}/{metric}": result[metric] for metric in CORE_METRICS}
+    )
+    values.update(
+        {
+            f"{WANDB_PREFIX_WITHOUT}/{metric}":
+                result[f"{metric}_without_likelihood_variance"]
+            for metric in CORE_METRICS
+        }
     )
     for key, value in values.items():
         run.summary[key] = value
@@ -268,12 +289,22 @@ def write_results(path, results):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wandb-dir", type=Path, default=Path("wandb"))
+    parser.add_argument(
+        "--dataset",
+        choices=("sicap", "crowdgleason"),
+        default="crowdgleason",
+        help="Dataset whose saved OrdinalSVGP runs should be evaluated.",
+    )
     parser.add_argument("--project", default="OGP")
     parser.add_argument("--entity", default=None)
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("results/crowdgleason_ordinal_svgp_likelihood_variance_on.csv"),
+        default=None,
+        help=(
+            "Destination CSV (default: "
+            "results/<dataset>_ordinal_svgp_likelihood_variance_on.csv)."
+        ),
     )
     parser.add_argument(
         "--update-wandb",
@@ -284,7 +315,7 @@ def parse_args():
         "--verification-tolerance",
         type=float,
         default=1e-10,
-        help="Maximum allowed difference from the stored zero-variance kappa.",
+        help="Maximum allowed difference from the stored kappa.",
     )
     parser.add_argument(
         "--limit",
@@ -297,7 +328,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    runs = discover_runs(args.wandb_dir)
+    if args.output is None:
+        args.output = Path(
+            f"results/{args.dataset}_ordinal_svgp_likelihood_variance_on.csv"
+        )
+    runs = discover_runs(args.wandb_dir, args.dataset)
     validate_coverage(runs)
     ordered_runs = [runs[key] for key in sorted(runs)]
     if args.limit is not None:

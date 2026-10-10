@@ -201,7 +201,7 @@ def instance_gp_based_model(cfg, X_train, y_train, versbose=False) -> Any:
     n_classes = len(np.unique(y_train))
     likelihood = instance_likelihood(cfg, n_classes)
 
-    if "SVGP" in model_name and "DKL" not in model_name:
+    if model_name in ["OrdinalSVGP", "SVGP_multiclass"]:
         kernel = instance_kernel(cfg, X_train)
         num_latent_gps = 1 if model_name == "OrdinalSVGP" else n_classes
 
@@ -214,78 +214,5 @@ def instance_gp_based_model(cfg, X_train, y_train, versbose=False) -> Any:
             num_latent_gps = 2
 
         model = instance_SVGP(cfg, init_Z, num_latent_gps, kernel, likelihood, X_train)
-
-    elif model_name == "OrdinalDSVI_DGP":
-        from models.utils import instance_dsvi_dgp
-
-        gps_inner_layer = cfg.model.gps_inner_layer
-        lengthscale = init_lengthscale_GP(cfg, X_train)
-
-        num_layers = cfg.model.num_layers
-        inner_mean_function = cfg.model.inner_mean_function
-
-        model, used_lengthscale = instance_dsvi_dgp(
-            X_train,
-            y_train,
-            dataset=None,
-            init_Z=init_Z,
-            num_layers=num_layers,
-            gps_per_inner_layer=gps_inner_layer,
-            gps_output_layer=1,
-            kernel_type="scale_rbf",
-            kernel_is_shared=False,
-            init_kernel_params={"ls": lengthscale, "os": 1.0},
-            type_inducing_point="latent_shared_independent",
-            inner_mean_function=inner_mean_function,
-            output_mean_function="zero",
-            init_variational_parameters="zeros_largestd",
-            whitened_gp=True,
-            whitened_kernel=False,
-            jitter=1e-6,
-            init_kernel_lengthscale="constant",
-            likelihood=likelihood,
-        )
-        model.num_data = X_train.shape[0]
-
-        # Control kernel parameter trainability
-        train_kernel_params = cfg.model.train_kernel_params
-        if not train_kernel_params:
-            for GP in model.GP_list:
-                for subkernel in GP.kernel.kernels:
-                    set_trainable(subkernel, False)
-
-        # Control inducing points trainability
-        train_inducing_points = cfg.model.train_inducing_points
-        if not train_inducing_points:
-            for GP in model.GP_list:
-                set_trainable(GP.inducing_variable, False)
-
-    if "DKL" in model_name:
-        import copy
-        from models.DKL import DeepKernelLearning
-        from models.MLP import MLP
-        import tensorflow as tf
-
-        kernel = instance_kernel(cfg, X_train)
-        num_latent_gps = 1 if model_name == "OrdinalSVGP" else n_classes
-
-        mlp_dims = cfg.model.mlp_config.hidden_layer_sizes
-        mlp_acts = cfg.model.mlp_config.activations
-
-        mlp = MLP(
-            inner_dims=mlp_dims,
-            activations=mlp_acts,
-            dropout_rate=float(cfg.model.mlp_config.dropout_rate),
-        )
-
-        init_Z = mlp(init_Z).numpy()
-
-        model = instance_SVGP(cfg, init_Z, 1, kernel, likelihood, X_train)
-
-        model = DeepKernelLearning(
-            mlp_model=mlp,
-            gp_model=copy.deepcopy(model),
-            name=cfg.model.name,
-        )
 
     return model

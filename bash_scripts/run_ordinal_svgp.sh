@@ -30,9 +30,8 @@ run_experiment() {
     local likelihood=${10}
     local bin_size=${11}
     local bin_range=${12}
-    local noise_level=${13}
-    local predict_using_sigma=${14}
-    local lr_scheduler=${15}
+    local predict_using_sigma=${13}
+    local lr_scheduler=${14}
 
     mkdir -p logs/${dataset}/${model_name}/
 
@@ -45,7 +44,6 @@ run_experiment() {
         dataset=$dataset \
         dataset.features=$feature \
         dataset.percentage=$percentage \
-        dataset.noise_level=$noise_level \
         model=$model_name \
         seed=$seed \
         training.learning_rate=$lr \
@@ -82,7 +80,6 @@ echo "Starting ${MODEL_NAME} experiments with GPU allocation..."
 # Define experiment parameters
 datasets=( "sicap" "crowdgleason")
 features=( "CONCHV15" "GIGAPATH" "VIRCHOW" "VIRCHOW2" "UNI2" "PHIKONV2"  "UNI" )
-features=( "CONCHV15" ) # DONE
 
 
 class_weights=( "None" )
@@ -93,7 +90,6 @@ percentages=(100)
 likelihoods=("Ordinal_trainable")
 bin_sizes=(1.0) # Used as alphas
 bin_ranges=(1.0) # Used to scale
-noise_levels=(0)
 lr_scheduler="cosine"
 
 
@@ -104,8 +100,7 @@ max_jobs=4
 # Run experiments
 for dataset in "${datasets[@]}"; do
     for feature in "${features[@]}"; do
-        for noise_level in "${noise_levels[@]}"; do
-            for percentage in "${percentages[@]}"; do
+        for percentage in "${percentages[@]}"; do
                 for seed in "${seeds[@]}"; do
                     for likelihood in "${likelihoods[@]}"; do
                         for bin_size in "${bin_sizes[@]}"; do
@@ -118,18 +113,14 @@ for dataset in "${datasets[@]}"; do
                                         if [ "$dataset" == "crowdgleason" ]; then
                                             lr=0.01
                                             predict_using_sigma=false
-                                        elif [ "$dataset" == "crowdgleason_EM" ]; then
-                                            lr=0.1
-                                            predict_using_sigma=false
                                         else
                                             lr=0.1
                                             predict_using_sigma=true
                                         fi
 
                                         # Run the experiment
-                                        run_experiment $dataset $feature $gpu_id $MODEL_NAME $class_weight $train_likelihood_param $seed $lr $percentage $likelihood $bin_size $bin_range $noise_level $predict_using_sigma $lr_scheduler
+                                        run_experiment $dataset $feature $gpu_id $MODEL_NAME $class_weight $train_likelihood_param $seed $lr $percentage $likelihood $bin_size $bin_range $predict_using_sigma $lr_scheduler
 
-                                    done
                                 done
                             done
                         done

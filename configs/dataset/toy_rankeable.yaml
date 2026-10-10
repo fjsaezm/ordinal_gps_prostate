@@ -4,5 +4,4 @@
 dataset:
   name: "toy_rankeable"
   features: None
-  noise_level: 0
   percentage: 100

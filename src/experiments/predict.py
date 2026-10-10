@@ -121,7 +121,7 @@ def predict_class_ordinal_latent_noise(
 def predict(cfg: DictConfig, model, X, y):
     model_name = cfg.model.name
 
-    if model_name in ["OrdinalSVGP", "DKL_OrdinalSVGP"]:
+    if model_name == "OrdinalSVGP":
         f_mean, f_var = model.predict_f(X)
         bin_edges_np = model.likelihood.bin_edges
         if (
@@ -154,16 +154,6 @@ def predict(cfg: DictConfig, model, X, y):
                 f_mean[..., :1], f_var[..., :1], bin_edges_np, sigma
             )
 
-    elif model_name == "OrdinalDSVI_DGP":
-        # Current implementation just uses the mean prediction
-        f_mean, f_var = model.predict_f(X)
-        bin_edges_np = model.likelihood.bin_edges
-        bin_edges_np = model.likelihood.bin_edges.numpy()
-        y_pred, class_probs = predict_class_ordinal_manual(
-            f_mean.numpy().squeeze(axis=0),
-            f_var.numpy().squeeze(axis=0),
-            bin_edges_np,
-        )
     elif model_name == "SVGP_multiclass":
         f_mean, f_var = model.predict_f(X)
         class_probs = tf.nn.softmax(f_mean, axis=1).numpy()
@@ -174,7 +164,6 @@ def predict(cfg: DictConfig, model, X, y):
             "MLP",
             "SVM",
             "KNN",
-            "NaiveBayes",
             "RandomForest",
     ]:
         y_pred = model.predict(X)

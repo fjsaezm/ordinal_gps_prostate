@@ -1,6 +1,0 @@
-# @package _global_
-# Model configuration for Naive Bayes
-
-model:
-  name: "NaiveBayes"
-  type: "naive_bayes"

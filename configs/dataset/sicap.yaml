@@ -7,4 +7,3 @@ dataset:
   description: "SICAP prostate cancer dataset"
   features: "UNI"  # Default feature type: UNI, UNI2, PHIKONV2, GIGAPATH, CONCHV15
   percentage: 100  # Percentage of training data to use (10, 20, ..., 100)
-  noise_level: 0 # Percentage of noise added to dataset labels

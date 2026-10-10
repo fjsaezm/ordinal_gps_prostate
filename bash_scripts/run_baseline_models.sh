@@ -11,13 +11,11 @@ WANDB_PROJECT="OGP"
 DATASET="crowdgleason"
 FEATURES=("UNI2" "PHIKONV2"  "VIRCHOW" "VIRCHOW2" "UNI" "GIGAPATH" "CONCHV15") # CONCHV15 done
 
-MODELS=("rl_ordinal" "mlp" "logistic_regression" "knn" "random_forest" "svm") # SVM
-MODELS=("ordinal_mlp")
+MODELS=("rl_ordinal" "mlp" "logistic_regression" "knn" "random_forest" "svm")
 seeds=(0 1 2 3 4)
 LEARNING_RATE=0.01
 EPOCHS=500
 percentages=(100)
-noise_levels=(0)
 
 # Create output directory
 mkdir -p logs
@@ -31,10 +29,7 @@ for feature in "${FEATURES[@]}"; do
     for model in "${MODELS[@]}"; do
         echo "  Running model: ${model}"
 
-        for noise_level in "${noise_levels[@]}"; do
-            echo "    Noise level: ${noise_level}%"
-
-            for percentage in "${percentages[@]}"; do
+        for percentage in "${percentages[@]}"; do
                 echo "    Data percentage: ${percentage}%"
 
                 for seed in "${seeds[@]}"; do
@@ -49,7 +44,6 @@ for feature in "${FEATURES[@]}"; do
                         dataset=${DATASET} \
                         dataset.features=${feature} \
                         dataset.percentage=${percentage} \
-                        dataset.noise_level=${noise_level} \
                         model=${model} \
                         seed=${seed} \
                         training.learning_rate=${LEARNING_RATE} \
@@ -59,7 +53,6 @@ for feature in "${FEATURES[@]}"; do
                     # Optional: Wait a bit between launches to avoid resource conflicts
                     sleep 2
                 done
-            done
         done
         wait
     done

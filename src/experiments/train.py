@@ -16,6 +16,67 @@ from utils_training import (
 )
 
 
+class BestOrdinalMLPCheckpoint(tf.keras.callbacks.Callback):
+    """Keep all OMLP state from the epoch with the lowest training loss.
+
+    ``OrdinalMLP.ordinal_likelihood`` is a GPflow object rather than a Keras
+    layer.  Keras' ModelCheckpoint and EarlyStopping callbacks therefore do
+    not include its learned thresholds and scale in ``model.weights``.  This
+    callback snapshots those variables explicitly and, when requested, writes
+    a TensorFlow checkpoint rooted at both objects.
+    """
+
+    def __init__(self, model, checkpoint_dir=None):
+        super().__init__()
+        self.ordinal_model = model
+        self.best_loss = np.inf
+        self.best_epoch = None
+        self.best_values = None
+        self.checkpoint = None
+        self.manager = None
+        if checkpoint_dir is not None:
+            self.checkpoint = tf.train.Checkpoint(
+                model=model,
+                ordinal_likelihood=model.ordinal_likelihood,
+            )
+            self.manager = tf.train.CheckpointManager(
+                self.checkpoint, checkpoint_dir, max_to_keep=1
+            )
+
+    @property
+    def state_variables(self):
+        variables = list(self.ordinal_model.trainable_variables)
+        for variable in self.ordinal_model.ordinal_likelihood.trainable_variables:
+            if all(variable is not existing for existing in variables):
+                variables.append(variable)
+        return variables
+
+    def on_epoch_end(self, epoch, logs=None):
+        loss = None if logs is None else logs.get("loss")
+        if loss is None or not np.isfinite(loss) or loss >= self.best_loss:
+            return
+        self.best_loss = float(loss)
+        self.best_epoch = int(epoch)
+        self.best_values = [variable.numpy().copy() for variable in self.state_variables]
+
+    def restore_best(self):
+        if self.best_values is None:
+            raise RuntimeError("OMLP training did not produce a finite loss")
+        variables = self.state_variables
+        if len(variables) != len(self.best_values):
+            raise RuntimeError("The OMLP variable set changed during training")
+        for variable, value in zip(variables, self.best_values):
+            variable.assign(value)
+        # Write once, after all variables have been restored to the same best
+        # epoch. This avoids a large checkpoint write after every improvement.
+        if self.manager is not None:
+            self.manager.save(checkpoint_number=self.best_epoch + 1)
+        print(
+            f"Restored complete OMLP state from epoch {self.best_epoch + 1} "
+            f"(loss={self.best_loss:.6f})"
+        )
+
+
 def train(cfg: DictConfig, model, X_train, y_train, logger=None):
     model_name = cfg.model.name
 
@@ -30,12 +91,7 @@ def train(cfg: DictConfig, model, X_train, y_train, logger=None):
     # Get save weights path at the beginning for all models
     save_weights_path = cfg.output.get("save_weights_path")
 
-    if model_name in [
-            "OrdinalSVGP",
-            "SVGP_multiclass",
-            "OrdinalDSVI_DGP",
-            "DKL_OrdinalSVGP",
-    ]:
+    if model_name in ["OrdinalSVGP", "SVGP_multiclass"]:
 
         # Linear Learning Rate Scheduler: reduces LR by 10x over 100 epochs
         steps_per_epoch = max(len(X_train) // batch_size, 1)
@@ -138,7 +194,7 @@ def train(cfg: DictConfig, model, X_train, y_train, logger=None):
             if logger is not None and (epoch + 1) % log_interval == 0:
                 logger.log(total_losses, step=epoch)
 
-                if model_name in ["OrdinalSVGP", "DKL_OrdinalSVGP"]:
+                if model_name == "OrdinalSVGP":
                     if model.likelihood.is_heteroscedastic:
                         diagnostics = {}
                         if getattr(model.likelihood, "uses_latent_noise", False):
@@ -182,10 +238,6 @@ def train(cfg: DictConfig, model, X_train, y_train, logger=None):
             checkpoint.restore(manager.latest_checkpoint).expect_partial()
             print("Restored best model")
 
-        if cfg.model.name == "DKL_OrdinalSVGP":
-            model.eval(
-            )  # Set DKL model to evaluation mode after loading weights
-
     elif model_name == "RLOrdinal":
         # mord models use sklearn-like API (much faster than statsmodels)
         model.fit(X_train, y_train.ravel())  # Ensure y is 1D
@@ -197,7 +249,6 @@ def train(cfg: DictConfig, model, X_train, y_train, logger=None):
             "MLP",
             "SVM",
             "KNN",
-            "NaiveBayes",
             "RandomForest",
     ]:
         model.fit(X_train, y_train)
@@ -220,31 +271,27 @@ def train(cfg: DictConfig, model, X_train, y_train, logger=None):
         optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
         model.compile(optimizer=optimizer)
 
-        # Callbacks
-        callbacks = []
-        if save_weights_path is not None:
-            checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-                filepath=save_weights_path + "best.keras",
-                save_best_only=True,
-                monitor='loss',
-                mode='min'
-            )
-            callbacks.append(checkpoint_callback)
+        # Keras does not track the separately attached GPflow likelihood in
+        # model.weights. Save and restore the complete state explicitly.
+        checkpoint_callback = BestOrdinalMLPCheckpoint(
+            model,
+            checkpoint_dir=save_weights_path,
+        )
 
         early_stopping = tf.keras.callbacks.EarlyStopping(
             monitor='loss',
             patience=patience,
-            restore_best_weights=True
+            restore_best_weights=False,
         )
-        callbacks.append(early_stopping)
 
         # Train
         model.fit(
             train_dataset,
             epochs=epochs,
-            callbacks=callbacks,
+            callbacks=[checkpoint_callback, early_stopping],
             verbose=1
         )
+        checkpoint_callback.restore_best()
 
     elif model_name in ["SORD", "Beta", "POE", "CORE", "DRF", "CORF"]:
         trainers = {

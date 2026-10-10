@@ -1,168 +1,92 @@
-# ProstateOrdinalGPClassification with OmegaConf
+# Ordinal Gaussian Processes for Gleason Grading
 
-This is an enhanced version of the ProstateOrdinalGPClassification project that uses **OmegaConf** and **Hydra** for configuration management, making it much easier to run experiments, perform hyperparameter sweeps, and manage different configurations.
+Repository for the paper **“Ordinal Gaussian Processes for Gleason Grading: Enhancing Performance and Calibration across Foundation Model Rankability Scores”**, submitted to *Computer Methods and Programs in Biomedicine*.
 
-## Key Improvements
-
-- 🔧 **Structured Configuration**: YAML-based configuration files instead of command-line arguments
-- 🚀 **Easy Hyperparameter Sweeps**: Built-in support for running multiple configurations
-- 📁 **Organized Results**: Automatic output directory management with timestamps
-- 🔄 **Configuration Inheritance**: Modular configs for datasets, models, and experiments
-- 📊 **Better Reproducibility**: All configurations are logged and saved with results
+![Overview of the Ordinal Gaussian Process pipeline](assets/OGP.png)
 
 ## Installation
 
-### Option 1: Using Conda (Recommended)
+Create and activate the Conda environment from the repository root:
 
 ```bash
-cd ProstateOrdinalGPClassification_OmegaConf
-
-# Automatic setup
-./setup_environment.sh
-
-# Manual setup
 conda env create -f environment.yaml
-conda activate prostate-ordinal-gp
+conda activate ordinalgp
 ```
 
-### Option 2: Using pip
+## Medical dataset structure
+
+The repository does not redistribute SICAPv2 or CrowdGleason. Experiments use pre-extracted foundation-model features stored as NumPy arrays. Each feature extractor must have the following directory structure:
+
+```text
+<dataset-root>/
+└── features_<FEATURE>/
+    ├── X_train.npy
+    ├── y_train.npy
+    ├── X_test.npy
+    ├── y_test.npy
+    ├── train_names.npy
+    └── test_names.npy
+```
+
+Supported feature names are `CONCHV15`, `GIGAPATH`, `PHIKONV2`, `UNI`, `UNI2`, `VIRCHOW`, and `VIRCHOW2`.
+
+Patch features can be extracted from whole-slide images using the [TRIDENT repository](https://github.com/mahmoodlab/TRIDENT). Arrange the resulting feature matrices and labels according to the structure above.
+
+Before running an experiment, set the dataset roots in [`SICAP_CLAM.py`](src/data/SICAP_CLAM.py) and [`CROWDGLEASON_CLAM.py`](src/data/CROWDGLEASON_CLAM.py). Feature matrices are standardized using the training-set statistics inside the loading pipeline.
+
+## Example of Ordinal Gaussian Processes on a toy dataset
+
+Train an OGP on the included non-rankable toy dataset without external logging:
 
 ```bash
-cd ProstateOrdinalGPClassification_OmegaConf
-pip install -r requirements.txt
+python src/experiments/main.py \
+  dataset=toy_non_rankable \
+  model=ordinal_svgp \
+  wandb.enabled=false \
+  training.epochs=500
 ```
 
-### Verify Installation
+The dedicated toy study additionally produces training-loss and latent-posterior plots:
 
 ```bash
-# Activate environment (if using conda)
-conda activate prostate-ordinal-gp
-
-# Test the configuration system
-python validate_config.py
+python src/experiments/toy_ablation.py
 ```
 
-## Configuration Structure
+## Medical dataset experiments
 
-```
-configs/
-├── config.yaml              # Main configuration file
-├── dataset/                  # Dataset configurations
-│   ├── sicap.yaml
-│   ├── crowdgleason.yaml
-│   ├── sicap_uni_full.yaml
-│   └── crowdgleason_uni_full.yaml
-├── model/                    # Model configurations
-│   ├── ordinal_svgp.yaml
-│   ├── ordinal_dsvi_dgp.yaml
-│   └── svgp_multiclass.yaml
-└── experiment/               # Experiment configurations
-    ├── base.yaml
-    └── ablation.yaml
-```
+Run one experiment by selecting a dataset, feature extractor, model, and seed through Hydra:
 
-## Usage Examples
-
-### 1. Basic Usage
-
-Run with default configuration:
 ```bash
-python src/experiments/main.py
+python src/experiments/main.py \
+  dataset=sicap \
+  dataset.features=UNI2 \
+  model=ordinal_svgp \
+  seed=0 \
+  wandb.enabled=false
 ```
 
-### 2. Override Parameters
+Replace `dataset=sicap` with `dataset=crowdgleason` as needed. Remove `wandb.enabled=false` to log metrics and checkpoints to Weights & Biases.
 
-Override specific parameters from command line:
+Use Hydra multirun for the complete five-seed comparison:
+
 ```bash
-# Change dataset and seed
-python src/experiments/main.py dataset=crowdgleason seed=2
-
-# Modify training parameters
-python src/experiments/main.py training.learning_rate=0.05 training.epochs=5000
-
-# Use different model
-python src/experiments/main.py model=ordinal_dsvi_dgp
-```
-
-### 3. Hyperparameter Sweeps
-
-Run multiple configurations with Hydra multirun:
-```bash
-# Simple sweep over seeds and learning rates
-python src/experiments/main.py -m seed=0,1,2,3,4 training.learning_rate=0.01,0.1
-
-# Complex sweep over multiple parameters
 python src/experiments/main.py -m \
-    dataset=sicap,crowdgleason \
-    model=ordinal_svgp \
-    seed=0,1,2 \
-    training.learning_rate=0.01,0.05,0.1 \
-    model.inducing_points.num_inducing=200,500
+  dataset=sicap,crowdgleason \
+  dataset.features=CONCHV15,GIGAPATH,PHIKONV2,UNI,UNI2,VIRCHOW,VIRCHOW2 \
+  model=ordinal_svgp,svgp_multiclass \
+  seed=0,1,2,3,4
 ```
 
-## Pre-built Scripts
+The scripts under [`bash_scripts/`](bash_scripts) provide additional batch-launch examples for the GP and baseline experiments.
 
-Several pre-built scripts are available in `bash_scripts/`:
+## Available models
 
-Run the added ordinal baselines with the standard experiment pipeline:
-```bash
-PYTHON_BIN=/home/fjaviersaezm/.conda/envs/GPFLOW/bin/python \
-MODELS="sord beta poe core drf corf" \
-DATASETS="sicap crowdgleason" \
-FEATURES="UNI2 PHIKONV2 VIRCHOW VIRCHOW2 UNI GIGAPATH CONCHV15" \
-SEEDS="0 1 2 3 4" \
-bash bash_scripts/run_ordinal_baselines.sh
-```
+Models are selected with `model=<configuration-name>`.
 
-For a short SORD trial, reduce the sweep and epoch count:
-```bash
-PYTHON_BIN=/home/fjaviersaezm/.conda/envs/GPFLOW/bin/python \
-MODELS="sord" DATASETS="sicap" FEATURES="UNI" SEEDS="0" \
-EPOCHS=20 BATCH_SIZE=128 MAX_PROCESSES=1 \
-bash bash_scripts/run_ordinal_baselines.sh
-```
+| Family | Configuration names |
+|---|---|
+| Gaussian processes | `ordinal_svgp` (OGP), `svgp_multiclass` (MGP) |
+| Ordinal neural models | `ordinal_mlp`, `sord`, `beta`, `poe`, `core`, `drf`, `corf` |
+| Classical baselines | `logistic_regression`, `rl_ordinal`, `svm`, `knn`, `random_forest`, `mlp` |
 
-Evaluate the 35 saved CrowdGleason OrdinalSVGP checkpoints while retaining
-the learned likelihood variance, and add namespaced metrics to the original
-W&B run summaries:
-```bash
-LD_PRELOAD=/home/fjaviersaezm/.conda/envs/ordinalgp/lib/libstdc++.so.6 \
-MPLCONFIGDIR=/tmp/matplotlib PYTHONPATH=src \
-/home/fjaviersaezm/.conda/envs/ordinalgp/bin/python \
-  src/experiments/evaluate_crowdgleason_likelihood_variance.py \
-  --update-wandb
-```
-
-The original `test/*` metrics are preserved. New values use the
-`test_with_likelihood_variance/*` prefix and are also exported to
-`results/crowdgleason_ordinal_svgp_likelihood_variance_on.csv`.
-
-1. **Ordinal SVGP experiments**:
-   ```bash
-   ./bash_scripts/run_ordinal_svgp_hydra.sh
-   ```
-
-2. **Ordinal DSVI-DGP ablation study**:
-   ```bash
-   ./bash_scripts/run_ordinal_dsvi_dgp_hydra.sh
-   ```
-
-3. **Demo of all features**:
-   ```bash
-   ./bash_scripts/demo_omegaconf.sh
-   ```
-
-## Configuration Management
-
-The system uses modular YAML configuration files that can be easily combined and overridden. This makes it much easier to:
-
-- Run hyperparameter sweeps
-- Organize experiment results
-- Reproduce experiments
-- Share configurations
-
-## Migration from Original Version
-
-The new system is backward compatible with the original argparse-based code. All existing functionality is preserved while adding the benefits of structured configuration management.
-
-For detailed documentation, see the full README with all configuration options and examples.
+All experiment settings can be overridden from the command line; the defaults are defined in [`configs/`](configs).

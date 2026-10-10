@@ -24,7 +24,6 @@ run_experiment() {
     local seed=$6
     local lr=$7
     local percentage=$8
-    local noise_level=$9
     
     mkdir -p logs/${dataset}/${model_name}/
 
@@ -36,18 +35,17 @@ run_experiment() {
         dataset=$dataset \
         dataset.features=$feature \
         dataset.percentage=$percentage \
-        dataset.noise_level=$noise_level \
         model=$model_name \
         seed=$seed \
         training.learning_rate=$lr \
-        training.epochs=500 \
-        training.patience=50 \
+        training.epochs=5000 \
+        training.patience=100 \
         training.batch_size=4096 \
         training.log_interval=10 \
         training.class_weights=None \
         training.lr_scheduler=None\
         training.lr_scheduler_last_epoch=2000 \
-        model.inducing_points.num_inducing=50 \
+        model.inducing_points.num_inducing=500 \
         model.inducing_points.init_method=kmeans \
         model.inner_mean_function=zero \
         model.kernel.type=RBF \
@@ -65,14 +63,13 @@ run_experiment() {
 echo "Starting ${MODEL_NAME} experiments with GPU allocation..."
 
 # Define experiment parameters
-datasets=("crowdgleason_EM")
+datasets=("sicap" "crowdgleason")
 features=( "CONCHV15"  "UNI2" "PHIKONV2"  "VIRCHOW" "VIRCHOW2" "UNI" "GIGAPATH")
 
 
 seeds=(0 1 2 3 4)
 percentages=(100)
 class_weight="None"
-noise_levels=(0)
 
 
 # Counter for active jobs
@@ -83,23 +80,18 @@ max_jobs=4
 # Run experiments
 for dataset in "${datasets[@]}"; do
     for feature in "${features[@]}"; do
-        for noise_level in "${noise_levels[@]}"; do
-
-            for percentage in "${percentages[@]}"; do
+        for percentage in "${percentages[@]}"; do
                 for seed in "${seeds[@]}"; do
                     gpu_id=$(wait_for_gpu)
                     # Learning rate dependent on dataset
                     if [ "$dataset" == "crowdgleason" ]; then
-                        lr=0.01
-                    elif [ "$dataset" == "crowdgleason_EM" ]; then
                         lr=0.01
                     else
                         lr=0.1
                     fi
 
                     # Run the experiment
-                    run_experiment $dataset $feature $gpu_id $MODEL_NAME $class_weight $seed $lr $percentage $noise_level
-                done
+                    run_experiment $dataset $feature $gpu_id $MODEL_NAME $class_weight $seed $lr $percentage
             done
         done
         wait
